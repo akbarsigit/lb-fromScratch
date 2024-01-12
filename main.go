@@ -38,6 +38,7 @@ type ServerPool struct {
 func GetRetryFromContext(r *http.Request) int {
 	fmt.Println(r.Context().Value(Retry))
 
+	// check if the retry is an type of int => int then return it
 	if retry, ok := r.Context().Value(Retry).(int); ok {
 		return retry
 	}
@@ -46,9 +47,20 @@ func GetRetryFromContext(r *http.Request) int {
 
 
 func (b *Backend) SetAlive(alive bool) {
+	// Lock is used to ensure no one (go routine) can read or write the data
+	// Just one routine at a time
 	b.mux.Lock()
 	b.Alive = alive
 	b.mux.Unlock()
+}
+
+func (b *Backend) IsAlive() (alive bool) {
+	// RLock is used to ensure that when reading of the data happend,
+	// no one is updating the value.
+	b.mux.RLock()
+	alive = b.Alive
+	b.mux.RUnlock()
+	return
 }
 
 func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
@@ -75,6 +87,16 @@ func (s *ServerPool) NextIndex() int {
 func (s *ServerPool) GetNextPeer() *Backend {
 	// Find the alive backend in the pool
 	next := s.NextIndex()
+	// start from the next -=> find in the full cycle
+	l := len(s.backends) + next
+	for i := next; i < l; i++ {
+		idx := i % len(s.backends)
+		if s.backends[idx].IsAlive() {
+
+
+		}
+	}
+
 }
 
 // Load balancing
