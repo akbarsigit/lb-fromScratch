@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -91,12 +92,15 @@ func (s *ServerPool) GetNextPeer() *Backend {
 	l := len(s.backends) + next
 	for i := next; i < l; i++ {
 		idx := i % len(s.backends)
+		// if its alive, use it and if its not the original, store it!
 		if s.backends[idx].IsAlive() {
-
-
+			if i != next { // if not original, then store for new index
+				atomic.StoreUint64(&s.current, uint64(idx))
+			}	
+			return s.backends[idx]
 		}
 	}
-
+	return nil
 }
 
 // Load balancing
@@ -114,6 +118,46 @@ func lb(w http.ResponseWriter, r *http.Request) {
 	}
 
 }
+
+// Check if backend is alive or not by trying to connect through TCP connection
+func isBackendAlive(u *url.URL) bool {
+	timeout := 2 * time.Second
+	conn, err := net.DialTimeout("tcp", u.Host, timeout)
+	if err != nil {
+		log.Println("Cant connect to the server, error: ", err)
+		return false
+	}
+	defer conn.Close()
+	return true
+}
+
+
+func (s *ServerPool) HealthCheck() {
+	for _, b := range s.backends{
+		status := "up"
+		alive := isBackendAlive(b.URL)
+		b.SetAlive(alive)
+		if !alive {
+			status = "down"
+		}
+		log.Printf("%s [%s]\n", b.URL, status)
+	}
+}
+
+// check if there is something wrong on the backend
+// refresh every 2 mins
+func healthCheck() {
+	t := time.NewTicker(time.Minute * 2)
+	for {
+		select {
+			case <- t.C:
+				log.Println("Start Health Checking...")
+				serverPool.HealthCheck()
+				log.Println("Health check complete")
+		}
+	}
+}
+
 
 var serverPool ServerPool
 
@@ -168,10 +212,17 @@ func main() {
 			lb(writer, request.WithContext(ctx))
 		}
 		
-		
+		// create server
+		server := http.Server{
+			Addr: fmt.Sprintf(":%d", port),
+			Handler: http.HandlerFunc(lb),
+		}
 
+		go healthCheck()
 
-		// fmt.Println(proxy)
-
+		log.Printf("Load Balancer started at: %d\n", port)
+		if err := server.ListenAndServe(); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
